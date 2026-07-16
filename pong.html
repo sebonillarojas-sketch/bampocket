@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PONG · BAMboy</title>
+<style>
+  html,body{margin:0;padding:0;width:100%;height:100%;background:#07080C;overflow:hidden}
+  body{display:flex;align-items:center;justify-content:center}
+  canvas{display:block;touch-action:none}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+(() => {
+  const cv = document.getElementById('c');
+  const cx = cv.getContext('2d');
+  const C = {
+    bg: '#07080C', net: 'rgba(168,155,217,.25)',
+    player: '#8b5cf6', cpu: '#5468e8', ball: '#F4F1EA',
+    text: '#F4F1EA', dim: '#6B7280', accent: '#A89BD9', win: '#F4643B',
+  };
+  const WIN_SCORE = 7;
+  let W = 400, H = 360;
+
+  function resize() {
+    const w = window.innerWidth || 400, h = window.innerHeight || 360;
+    // 10:9 como la pantalla del BAMboy, ajustado a lo que haya
+    const s = Math.min(w / 10, h / 9);
+    W = Math.floor(s * 10); H = Math.floor(s * 9);
+    cv.width = W; cv.height = H;
+    cv.style.width = W + 'px'; cv.style.height = H + 'px';
+    layout(); draw();
+  }
+
+  // --- audio ---
+  let actx = null;
+  function tone(freq, dur, vol, type) {
+    try {
+      actx = actx || new (window.AudioContext || window.webkitAudioContext)();
+      if (actx.state === 'suspended') actx.resume();
+      const o = actx.createOscillator(), g = actx.createGain();
+      o.type = type || 'square'; o.frequency.value = freq;
+      g.gain.setValueAtTime(0.0001, actx.currentTime);
+      g.gain.exponentialRampToValueAtTime(vol, actx.currentTime + 0.01);
+      g.gain.exponentialRampToValueAtTime(0.0001, actx.currentTime + dur);
+      o.connect(g); g.connect(actx.destination);
+      o.start(); o.stop(actx.currentTime + dur + 0.05);
+    } catch (e) {}
+  }
+
+  // --- estado ---
+  let state = 'title'; // title | play | point | over
+  let pl, cpu, ball, scoreL, scoreR, keys = {}, raf = null, pointTimer = null;
+
+  function layout() {
+    const padH = H * .18, padW = Math.max(6, W * .02);
+    pl = pl || {}; cpu = cpu || {};
+    pl.w = padW; pl.h = padH; pl.x = padW * 2;
+    cpu.w = padW; cpu.h = padH; cpu.x = W - padW * 3;
+    if (pl.y == null) pl.y = (H - padH) / 2;
+    if (cpu.y == null) cpu.y = (H - padH) / 2;
+  }
+  function newBall(towards) {
+    const a = (Math.random() * .6 - .3) + (towards === 'left' ? Math.PI : 0);
+    const v = W * .006;
+    ball = {x: W / 2, y: H / 2, vx: Math.cos(a) * v, vy: Math.sin(a) * v, r: Math.max(4, W * .012), speed: v};
+  }
+  function startMatch() {
+    scoreL = 0; scoreR = 0;
+    pl.y = cpu.y = (H - pl.h) / 2;
+    newBall(Math.random() < .5 ? 'left' : 'right');
+    state = 'play';
+    tone(659.25, .07, .07); tone(1046.5, .1, .07);
+    if (!raf) tick();
+  }
+
+  function tick() {
+    raf = requestAnimationFrame(tick);
+    if (state !== 'play') { draw(); return; }
+    // jugador con teclado
+    const pv = H * .012;
+    if (keys.up) pl.y -= pv;
+    if (keys.down) pl.y += pv;
+    pl.y = Math.max(0, Math.min(H - pl.h, pl.y));
+    // CPU: sigue la bola con tope de velocidad (imbatible no es divertido)
+    const cpuMax = H * .0082;
+    const target = ball.y - cpu.h / 2;
+    cpu.y += Math.max(-cpuMax, Math.min(cpuMax, target - cpu.y));
+    cpu.y = Math.max(0, Math.min(H - cpu.h, cpu.y));
+    // bola
+    ball.x += ball.vx; ball.y += ball.vy;
+    if (ball.y - ball.r < 0 && ball.vy < 0) { ball.vy *= -1; tone(440, .04, .05); }
+    if (ball.y + ball.r > H && ball.vy > 0) { ball.vy *= -1; tone(440, .04, .05); }
+    // paletas
+    const hit = (p, dirRight) => {
+      if (ball.y > p.y - ball.r && ball.y < p.y + p.h + ball.r) {
+        const rel = ((ball.y - p.y) / p.h - .5) * 2;      // -1..1
+        ball.speed = Math.min(ball.speed * 1.05, W * .014);
+        const ang = rel * 1.0;                              // máx ~57°
+        ball.vx = Math.cos(ang) * ball.speed * (dirRight ? 1 : -1);
+        ball.vy = Math.sin(ang) * ball.speed;
+        tone(880, .05, .08);
+        return true;
+      }
+      return false;
+    };
+    if (ball.vx < 0 && ball.x - ball.r < pl.x + pl.w && ball.x - ball.r > pl.x && hit(pl, true)) ball.x = pl.x + pl.w + ball.r;
+    if (ball.vx > 0 && ball.x + ball.r > cpu.x && ball.x + ball.r < cpu.x + cpu.w && hit(cpu, false)) ball.x = cpu.x - ball.r;
+    // punto
+    if (ball.x < -ball.r * 2) point('cpu');
+    if (ball.x > W + ball.r * 2) point('player');
+    draw();
+  }
+  function point(who) {
+    if (who === 'player') { scoreL++; tone(1046.5, .12, .09); } else { scoreR++; tone(220, .2, .09, 'sawtooth'); }
+    if (scoreL >= WIN_SCORE || scoreR >= WIN_SCORE) { state = 'over'; return; }
+    state = 'point';
+    clearTimeout(pointTimer);
+    pointTimer = setTimeout(() => { newBall(who === 'player' ? 'right' : 'left'); state = 'play'; }, 900);
+  }
+
+  // --- render ---
+  function text(str, y, size, color) {
+    cx.fillStyle = color; cx.font = 'bold ' + size + 'px "Courier New",monospace';
+    cx.textAlign = 'center'; cx.fillText(str, W / 2, y);
+  }
+  function draw() {
+    cx.fillStyle = C.bg; cx.fillRect(0, 0, W, H);
+    // red central
+    cx.strokeStyle = C.net; cx.lineWidth = 2; cx.setLineDash([H * .02, H * .02]);
+    cx.beginPath(); cx.moveTo(W / 2, 0); cx.lineTo(W / 2, H); cx.stroke(); cx.setLineDash([]);
+    if (state !== 'title') {
+      text(scoreL, H * .16, H * .1, C.dim); // marcador
+      cx.save(); cx.translate(W * .25 - W / 2, 0); text(scoreL, H * .16, H * .1, C.accent); cx.restore();
+      cx.save(); cx.translate(W * .75 - W / 2, 0); text(scoreR, H * .16, H * .1, C.dim); cx.restore();
+      cx.fillStyle = C.bg; cx.fillRect(W / 2 - H * .06, H * .06, H * .12, H * .12); // limpia el del medio
+      cx.fillStyle = C.player; cx.fillRect(pl.x, pl.y, pl.w, pl.h);
+      cx.fillStyle = C.cpu; cx.fillRect(cpu.x, cpu.y, cpu.w, cpu.h);
+      if (state !== 'over') { cx.fillStyle = C.ball; cx.fillRect(ball.x - ball.r, ball.y - ball.r, ball.r * 2, ball.r * 2); }
+    }
+    if (state === 'title') {
+      text('PONG', H * .38, H * .12, C.accent);
+      text('BAM STUDIO', H * .47, H * .045, C.dim);
+      text('FLECHAS O ARRASTRA', H * .62, H * .05, C.text);
+      text('TECLA O TAP PARA JUGAR', H * .70, H * .05, C.text);
+      text('PRIMERO A ' + WIN_SCORE + ' GANA', H * .80, H * .04, C.dim);
+    }
+    if (state === 'over') {
+      const won = scoreL > scoreR;
+      cx.fillStyle = 'rgba(7,8,12,.75)'; cx.fillRect(0, 0, W, H);
+      text(won ? 'GANASTE!' : 'GANA LA CPU', H * .42, H * .09, won ? C.accent : C.win);
+      text(scoreL + ' - ' + scoreR, H * .54, H * .07, C.text);
+      text('TECLA O TAP PARA REVANCHA', H * .66, H * .045, C.dim);
+    }
+  }
+
+  // --- input ---
+  window.addEventListener('keydown', e => {
+    const k = e.key.toLowerCase();
+    if (k === 'arrowup' || k === 'w') { e.preventDefault(); keys.up = true; }
+    else if (k === 'arrowdown' || k === 's') { e.preventDefault(); keys.down = true; }
+    if (state === 'title' || state === 'over') startMatch();
+  });
+  window.addEventListener('keyup', e => {
+    const k = e.key.toLowerCase();
+    if (k === 'arrowup' || k === 'w') keys.up = false;
+    if (k === 'arrowdown' || k === 's') keys.down = false;
+  });
+  // mouse / touch: la paleta sigue el dedo
+  let dragging = false;
+  const toY = e => { const r = cv.getBoundingClientRect(); return (e.clientY - r.top) * (H / r.height); };
+  window.addEventListener('pointerdown', e => {
+    dragging = true;
+    if (state === 'title' || state === 'over') startMatch();
+    else pl.y = Math.max(0, Math.min(H - pl.h, toY(e) - pl.h / 2));
+  });
+  window.addEventListener('pointermove', e => {
+    if (!dragging || state !== 'play') return;
+    pl.y = Math.max(0, Math.min(H - pl.h, toY(e) - pl.h / 2));
+  });
+  window.addEventListener('pointerup', () => { dragging = false; });
+
+  window.addEventListener('resize', resize);
+  try { window.focus(); } catch (e) {}
+  resize();
+  tick();
+})();
+</script>
+</body>
+</html>
