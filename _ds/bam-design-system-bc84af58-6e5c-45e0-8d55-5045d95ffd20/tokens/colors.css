@@ -1,0 +1,23 @@
+:root{
+/* Paleta principal — 60% */
+--bam-dark:#373737;
+--bam-periwinkle:#95ABE8;
+/* Secundarios — 30% */
+--bam-orange:#F7643B;
+--bam-stone:#E3E1DE;
+/* Acento — 10% */
+--bam-white:#F9F9F9;
+--bam-black:#000000;
+/* Semantic */
+--surface-page:var(--bam-stone);
+--surface-card:var(--bam-white);
+--surface-ink:var(--bam-dark);
+--surface-accent:var(--bam-periwinkle);
+--surface-alert:var(--bam-orange);
+--text-body:var(--bam-black);
+--text-on-dark:var(--bam-stone);
+--text-muted:rgba(0,0,0,.45);
+--text-muted-on-dark:rgba(227,225,222,.55);
+--border-ink:var(--bam-black);
+--border-hairline:rgba(0,0,0,.2);
+}

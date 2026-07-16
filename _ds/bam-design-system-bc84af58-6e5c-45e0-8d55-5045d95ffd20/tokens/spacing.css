@@ -1,0 +1,12 @@
+:root{
+--sp-1:4px;--sp-2:8px;--sp-3:12px;--sp-4:16px;--sp-5:24px;--sp-6:32px;--sp-7:48px;--sp-8:64px;--sp-9:96px;--sp-10:128px;
+/* Grilla de puntos: módulo del sistema gráfico */
+--grid-module:96px;
+--grid-dot:2px;
+--grid-dot-color:rgba(0,0,0,.35);
+--grid-dot-color-on-dark:rgba(249,249,249,.4);
+/* Purista: sin radios, sin sombras */
+--radius-0:0px;
+--border-w:1px;
+--shadow-none:none;
+}
