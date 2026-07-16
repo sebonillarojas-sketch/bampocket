@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TETRIS · BAMboy</title>
+<style>
+  html,body{margin:0;padding:0;width:100%;height:100%;background:#07080C;overflow:hidden}
+  body{display:flex;align-items:center;justify-content:center}
+  canvas{display:block;touch-action:none}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+(() => {
+  const COLS = 10, ROWS = 18;
+  const cv = document.getElementById('c');
+  const cx = cv.getContext('2d');
+  const C = {
+    bg: '#07080C', wellBg: '#0D0F16', grid: 'rgba(168,155,217,.07)', border: '#2A3BAF',
+    text: '#F4F1EA', dim: '#6B7280', accent: '#A89BD9', danger: '#F4643B', ghost: 'rgba(168,155,217,.18)',
+  };
+  // paleta atomic purple para las 7 piezas
+  const PCOLORS = {I:'#a78bfa', O:'#8b5cf6', T:'#c4b8f0', S:'#5468e8', Z:'#F4643B', J:'#3D52D5', L:'#7c6ee0'};
+  const SHAPES = {
+    I: [[0,1],[1,1],[2,1],[3,1]], O: [[1,0],[2,0],[1,1],[2,1]],
+    T: [[1,0],[0,1],[1,1],[2,1]], S: [[1,0],[2,0],[0,1],[1,1]],
+    Z: [[0,0],[1,0],[1,1],[2,1]], J: [[0,0],[0,1],[1,1],[2,1]],
+    L: [[2,0],[0,1],[1,1],[2,1]],
+  };
+  let cell = 20, wellX = 0, wellY = 0, panelX = 0;
+
+  function resize() {
+    const w = window.innerWidth || 400, h = window.innerHeight || 360;
+    cell = Math.max(8, Math.floor(Math.min(h / (ROWS + 1), w / (COLS + 8))));
+    cv.width = w; cv.height = h;
+    wellY = Math.floor((h - ROWS * cell) / 2);
+    wellX = Math.floor((w - (COLS + 6.5) * cell) / 2);
+    panelX = wellX + COLS * cell + cell * 1.5;
+    draw();
+  }
+
+  let actx = null;
+  function tone(freq, dur, vol, type) {
+    try {
+      actx = actx || new (window.AudioContext || window.webkitAudioContext)();
+      if (actx.state === 'suspended') actx.resume();
+      const o = actx.createOscillator(), g = actx.createGain();
+      o.type = type || 'square'; o.frequency.value = freq;
+      g.gain.setValueAtTime(0.0001, actx.currentTime);
+      g.gain.exponentialRampToValueAtTime(vol, actx.currentTime + 0.01);
+      g.gain.exponentialRampToValueAtTime(0.0001, actx.currentTime + dur);
+      o.connect(g); g.connect(actx.destination);
+      o.start(); o.stop(actx.currentTime + dur + 0.05);
+    } catch (e) {}
+  }
+
+  // --- estado ---
+  let board, piece, next, bag = [], score, lines, level, best = 0, state = 'title', timer = null;
+  try { best = +localStorage.getItem('bamboy-tetris-best') || 0; } catch (e) {}
+
+  function fromBag() {
+    if (!bag.length) { bag = Object.keys(SHAPES).slice(); for (let i = bag.length - 1; i > 0; i--) { const j = (Math.random() * (i + 1)) | 0; [bag[i], bag[j]] = [bag[j], bag[i]]; } }
+    return bag.pop();
+  }
+  function spawn() {
+    const k = next || fromBag(); next = fromBag();
+    piece = {k, blocks: SHAPES[k].map(b => b.slice()), x: 3, y: -1};
+    if (collides(piece.blocks, piece.x, piece.y)) gameOver();
+  }
+  function collides(blocks, px, py) {
+    return blocks.some(([bx, by]) => {
+      const x = px + bx, y = py + by;
+      return x < 0 || x >= COLS || y >= ROWS || (y >= 0 && board[y][x]);
+    });
+  }
+  function rotated(blocks, dir) {
+    // rota dentro de una caja 4x4 (I) o 3x3
+    const size = piece.k === 'I' ? 4 : (piece.k === 'O' ? 0 : 3);
+    if (!size) return blocks.map(b => b.slice());
+    return blocks.map(([x, y]) => dir > 0 ? [size - 1 - y, x] : [y, size - 1 - x]);
+  }
+  function tryRotate(dir) {
+    if (piece.k === 'O') return;
+    const rb = rotated(piece.blocks, dir);
+    for (const kick of [0, -1, 1, -2, 2]) {
+      if (!collides(rb, piece.x + kick, piece.y)) {
+        piece.blocks = rb; piece.x += kick; tone(659.25, .04, .05); draw(); return;
+      }
+    }
+  }
+  function move(dx) {
+    if (!collides(piece.blocks, piece.x + dx, piece.y)) { piece.x += dx; tone(440, .03, .04); draw(); }
+  }
+  function drop(soft) {
+    if (!collides(piece.blocks, piece.x, piece.y + 1)) {
+      piece.y++; if (soft) score += 1;
+      draw(); return true;
+    }
+    lock(); return false;
+  }
+  function hardDrop() {
+    let d = 0;
+    while (!collides(piece.blocks, piece.x, piece.y + 1)) { piece.y++; d++; }
+    score += d * 2; tone(220, .06, .08); lock();
+  }
+  function lock() {
+    piece.blocks.forEach(([bx, by]) => { const y = piece.y + by; if (y >= 0) board[y][piece.x + bx] = piece.k; });
+    let cleared = 0;
+    for (let y = ROWS - 1; y >= 0; y--) {
+      if (board[y].every(Boolean)) { board.splice(y, 1); board.unshift(Array(COLS).fill(null)); cleared++; y++; }
+    }
+    if (cleared) {
+      score += [0, 100, 300, 500, 800][cleared] * level;
+      lines += cleared;
+      const nl = 1 + (lines / 10 | 0);
+      if (nl > level) { level = nl; tone(1046.5, .1, .09); tone(1318.5, .15, .09); }
+      [523.25, 659.25, 783.99, 1046.5].slice(0, cleared + 1).forEach((f, i) => setTimeout(() => tone(f, .07, .08), i * 60));
+    } else tone(330, .04, .06);
+    spawn(); schedule(); draw();
+  }
+  function speedMs() { return Math.max(80, 800 - (level - 1) * 70); }
+  function schedule() {
+    clearInterval(timer);
+    timer = setInterval(() => { if (state === 'play') drop(false); }, speedMs());
+  }
+  function start() {
+    board = Array.from({length: ROWS}, () => Array(COLS).fill(null));
+    score = 0; lines = 0; level = 1; bag = []; next = null;
+    spawn(); state = 'play';
+    tone(659.25, .07, .07); tone(1046.5, .1, .07);
+    schedule(); draw();
+  }
+  function gameOver() {
+    state = 'over'; clearInterval(timer);
+    if (score > best) { best = score; try { localStorage.setItem('bamboy-tetris-best', best); } catch (e) {} }
+    tone(220, .25, .1, 'sawtooth'); setTimeout(() => tone(110, .4, .1, 'sawtooth'), 180);
+    draw();
+  }
+
+  // --- render ---
+  function block(x, y, color, px, py, size) {
+    const s = size || cell;
+    const X = (px != null ? px : wellX + x * cell), Y = (py != null ? py : wellY + y * cell);
+    cx.fillStyle = color; cx.fillRect(X + 1, Y + 1, s - 2, s - 2);
+    cx.fillStyle = 'rgba(255,255,255,.25)'; cx.fillRect(X + 1, Y + 1, s - 2, 2);
+    cx.fillStyle = 'rgba(0,0,0,.3)'; cx.fillRect(X + 1, Y + s - 3, s - 2, 2);
+  }
+  function label(str, x, y, size, color, align) {
+    cx.fillStyle = color; cx.font = 'bold ' + size + 'px "Courier New",monospace';
+    cx.textAlign = align || 'left'; cx.fillText(str, x, y);
+  }
+  function draw() {
+    cx.fillStyle = C.bg; cx.fillRect(0, 0, cv.width, cv.height);
+    if (state === 'title') {
+      label('TETRIS', cv.width / 2, cv.height * .38, cell * 1.8, C.accent, 'center');
+      label('BAM STUDIO', cv.width / 2, cv.height * .47, cell * .7, C.dim, 'center');
+      label('←→ MOVER · ↑ GIRAR · ↓ BAJAR', cv.width / 2, cv.height * .62, cell * .7, C.text, 'center');
+      label('ESPACIO: CAER · TECLA PARA JUGAR', cv.width / 2, cv.height * .70, cell * .7, C.text, 'center');
+      if (best) label('BEST ' + best, cv.width / 2, cv.height * .82, cell * .7, C.dim, 'center');
+      return;
+    }
+    // pozo
+    cx.fillStyle = C.wellBg; cx.fillRect(wellX, wellY, COLS * cell, ROWS * cell);
+    cx.strokeStyle = C.border; cx.lineWidth = 2;
+    cx.strokeRect(wellX - 1, wellY - 1, COLS * cell + 2, ROWS * cell + 2);
+    cx.strokeStyle = C.grid; cx.lineWidth = 1;
+    for (let i = 1; i < COLS; i++) { cx.beginPath(); cx.moveTo(wellX + i * cell + .5, wellY); cx.lineTo(wellX + i * cell + .5, wellY + ROWS * cell); cx.stroke(); }
+    for (let j = 1; j < ROWS; j++) { cx.beginPath(); cx.moveTo(wellX, wellY + j * cell + .5); cx.lineTo(wellX + COLS * cell, wellY + j * cell + .5); cx.stroke(); }
+    // tablero
+    board.forEach((row, y) => row.forEach((k, x) => { if (k) block(x, y, PCOLORS[k]); }));
+    if (state !== 'over' && piece) {
+      // ghost
+      let gy = piece.y; while (!collides(piece.blocks, piece.x, gy + 1)) gy++;
+      piece.blocks.forEach(([bx, by]) => { if (gy + by >= 0) { cx.fillStyle = C.ghost; cx.fillRect(wellX + (piece.x + bx) * cell + 1, wellY + (gy + by) * cell + 1, cell - 2, cell - 2); } });
+      // pieza
+      piece.blocks.forEach(([bx, by]) => { if (piece.y + by >= 0) block(piece.x + bx, piece.y + by, PCOLORS[piece.k]); });
+    }
+    // panel
+    let py = wellY + cell;
+    label('SCORE', panelX, py, cell * .65, C.dim); py += cell * .9;
+    label(String(score), panelX, py, cell * .8, C.text); py += cell * 1.6;
+    label('BEST', panelX, py, cell * .65, C.dim); py += cell * .9;
+    label(String(best), panelX, py, cell * .8, C.accent); py += cell * 1.6;
+    label('LINES', panelX, py, cell * .65, C.dim); py += cell * .9;
+    label(String(lines), panelX, py, cell * .8, C.text); py += cell * 1.6;
+    label('LEVEL', panelX, py, cell * .65, C.dim); py += cell * .9;
+    label(String(level), panelX, py, cell * .8, C.text); py += cell * 1.6;
+    label('NEXT', panelX, py, cell * .65, C.dim); py += cell * .5;
+    if (next) {
+      const s = cell * .8;
+      SHAPES[next].forEach(([bx, by]) => block(0, 0, PCOLORS[next], panelX + bx * s, py + by * s, s));
+    }
+    if (state === 'over') {
+      cx.fillStyle = 'rgba(7,8,12,.8)'; cx.fillRect(0, 0, cv.width, cv.height);
+      label('GAME OVER', cv.width / 2, cv.height * .42, cell * 1.4, C.danger, 'center');
+      label('SCORE ' + score + (score === best && score ? ' · RECORD!' : ''), cv.width / 2, cv.height * .54, cell * .8, C.text, 'center');
+      label('TECLA O TAP PARA REINICIAR', cv.width / 2, cv.height * .66, cell * .65, C.dim, 'center');
+    }
+  }
+
+  // --- input ---
+  window.addEventListener('keydown', e => {
+    const k = e.key.toLowerCase();
+    if (['arrowleft','arrowright','arrowup','arrowdown',' '].includes(k) || k === 'z' || k === 'x' || k === 'w' || k === 'a' || k === 's' || k === 'd') e.preventDefault();
+    if (state !== 'play') { start(); return; }
+    if (k === 'arrowleft' || k === 'a') move(-1);
+    else if (k === 'arrowright' || k === 'd') move(1);
+    else if (k === 'arrowdown' || k === 's') drop(true);
+    else if (k === 'arrowup' || k === 'x' || k === 'w') tryRotate(1);
+    else if (k === 'z') tryRotate(-1);
+    else if (k === ' ') hardDrop();
+  });
+  // táctil: swipe izq/der mueve, swipe abajo cae, tap gira
+  let t0 = null;
+  window.addEventListener('pointerdown', e => {
+    if (state !== 'play') { start(); return; }
+    t0 = {x: e.clientX, y: e.clientY, t: Date.now()};
+  });
+  window.addEventListener('pointerup', e => {
+    if (!t0 || state !== 'play') return;
+    const dx = e.clientX - t0.x, dy = e.clientY - t0.y; const dt = Date.now() - t0.t; t0 = null;
+    if (Math.abs(dx) < 20 && Math.abs(dy) < 20 && dt < 350) { tryRotate(1); return; }
+    if (Math.abs(dx) > Math.abs(dy)) move(dx > 0 ? 1 : -1);
+    else if (dy > 40) hardDrop();
+    else if (dy < -40) tryRotate(1);
+  });
+
+  window.addEventListener('resize', resize);
+  try { window.focus(); } catch (e) {}
+  resize();
+})();
+</script>
+</body>
+</html>
