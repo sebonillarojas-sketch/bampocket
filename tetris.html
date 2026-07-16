@@ -42,19 +42,75 @@
   }
 
   let actx = null;
-  function tone(freq, dur, vol, type) {
+  function audio() {
     try {
       actx = actx || new (window.AudioContext || window.webkitAudioContext)();
       if (actx.state === 'suspended') actx.resume();
-      const o = actx.createOscillator(), g = actx.createGain();
-      o.type = type || 'square'; o.frequency.value = freq;
-      g.gain.setValueAtTime(0.0001, actx.currentTime);
-      g.gain.exponentialRampToValueAtTime(vol, actx.currentTime + 0.01);
-      g.gain.exponentialRampToValueAtTime(0.0001, actx.currentTime + dur);
-      o.connect(g); g.connect(actx.destination);
-      o.start(); o.stop(actx.currentTime + dur + 0.05);
-    } catch (e) {}
+      return actx;
+    } catch (e) { return null; }
   }
+  function tone(freq, dur, vol, type) {
+    const ctx = audio(); if (!ctx) return;
+    const o = ctx.createOscillator(), g = ctx.createGain();
+    o.type = type || 'square'; o.frequency.value = freq;
+    g.gain.setValueAtTime(0.0001, ctx.currentTime);
+    g.gain.exponentialRampToValueAtTime(vol, ctx.currentTime + 0.01);
+    g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + dur);
+    o.connect(g); g.connect(ctx.destination);
+    o.start(); o.stop(ctx.currentTime + dur + 0.05);
+  }
+
+  // --- música: Korobeiniki (tradicional rusa, dominio público) ---
+  const N = {A4:440, B4:493.88, C5:523.25, D5:587.33, E5:659.25, F5:698.46, G5:783.99, A5:880, GS4:415.30, E4:329.63, A3:220, E3:164.81, GS3:207.65, C4:261.63, D4:293.66, F4:349.23};
+  // [freq, beats] — tema A completo; 0 = silencio
+  const MELODY = [
+    [N.E5,1],[N.B4,.5],[N.C5,.5],[N.D5,1],[N.C5,.5],[N.B4,.5],
+    [N.A4,1],[N.A4,.5],[N.C5,.5],[N.E5,1],[N.D5,.5],[N.C5,.5],
+    [N.B4,1.5],[N.C5,.5],[N.D5,1],[N.E5,1],
+    [N.C5,1],[N.A4,1],[N.A4,2],
+    [0,.5],[N.D5,1],[N.F5,.5],[N.A5,1],[N.G5,.5],[N.F5,.5],
+    [N.E5,1.5],[N.C5,.5],[N.E5,1],[N.D5,.5],[N.C5,.5],
+    [N.B4,1],[N.B4,.5],[N.C5,.5],[N.D5,1],[N.E5,1],
+    [N.C5,1],[N.A4,1],[N.A4,2],
+  ];
+  // bajo simple alternando tónica/quinta por compás
+  const BASS = [
+    [N.E3,2],[N.A3,2],[N.A3,2],[N.A3,2],[N.GS3,2],[N.E3,2],[N.A3,2],[N.A3,2],
+    [N.D4,2],[N.D4,2],[N.C4,2],[N.C4,2],[N.GS3,2],[N.E3,2],[N.A3,2],[N.A3,2],
+  ];
+  let musicOn = true, mNext = 0, mIdx = 0, bNext = 0, bIdx = 0, mTimer = null;
+  function beatDur() { return Math.max(.20, .34 - (level - 1) * .012); }
+  function noteAt(freq, t, dur, vol, type) {
+    const ctx = audio(); if (!ctx) return;
+    const o = ctx.createOscillator(), g = ctx.createGain();
+    o.type = type; o.frequency.value = freq;
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(vol, t + 0.02);
+    g.gain.setValueAtTime(vol, t + Math.max(0.03, dur - 0.05));
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    o.connect(g); g.connect(ctx.destination);
+    o.start(t); o.stop(t + dur + 0.05);
+  }
+  function musicStart() {
+    const ctx = audio(); if (!ctx || mTimer) return;
+    mNext = bNext = ctx.currentTime + 0.1; mIdx = bIdx = 0;
+    mTimer = setInterval(() => {
+      if (!musicOn || state !== 'play' || !actx) return;
+      if (mNext < actx.currentTime) { mNext = bNext = actx.currentTime + 0.05; }
+      const ahead = actx.currentTime + 0.15;
+      while (mNext < ahead) {
+        const [f, b] = MELODY[mIdx]; const d = b * beatDur();
+        if (f) noteAt(f, mNext, d * 0.92, 0.028, 'square');
+        mNext += d; mIdx = (mIdx + 1) % MELODY.length;
+      }
+      while (bNext < ahead) {
+        const [f, b] = BASS[bIdx]; const d = b * beatDur();
+        if (f) noteAt(f, bNext, d * 0.85, 0.02, 'triangle');
+        bNext += d; bIdx = (bIdx + 1) % BASS.length;
+      }
+    }, 40);
+  }
+  function musicStop() { clearInterval(mTimer); mTimer = null; }
 
   // --- estado ---
   let board, piece, next, bag = [], score, lines, level, best = 0, state = 'title', timer = null;
@@ -130,10 +186,11 @@
     score = 0; lines = 0; level = 1; bag = []; next = null;
     spawn(); state = 'play';
     tone(659.25, .07, .07); tone(1046.5, .1, .07);
+    musicStop(); musicStart();
     schedule(); draw();
   }
   function gameOver() {
-    state = 'over'; clearInterval(timer);
+    state = 'over'; clearInterval(timer); musicStop();
     if (score > best) { best = score; try { localStorage.setItem('bamboy-tetris-best', best); } catch (e) {} }
     tone(220, .25, .1, 'sawtooth'); setTimeout(() => tone(110, .4, .1, 'sawtooth'), 180);
     draw();
@@ -157,8 +214,9 @@
       label('TETRIS', cv.width / 2, cv.height * .38, cell * 1.8, C.accent, 'center');
       label('BAM STUDIO', cv.width / 2, cv.height * .47, cell * .7, C.dim, 'center');
       label('←→ MOVER · ↑ GIRAR · ↓ BAJAR', cv.width / 2, cv.height * .62, cell * .7, C.text, 'center');
-      label('ESPACIO: CAER · TECLA PARA JUGAR', cv.width / 2, cv.height * .70, cell * .7, C.text, 'center');
-      if (best) label('BEST ' + best, cv.width / 2, cv.height * .82, cell * .7, C.dim, 'center');
+      label('ESPACIO: CAER · M: MUSICA', cv.width / 2, cv.height * .70, cell * .7, C.text, 'center');
+      label('TECLA O TAP PARA JUGAR', cv.width / 2, cv.height * .78, cell * .7, C.text, 'center');
+      if (best) label('BEST ' + best, cv.width / 2, cv.height * .88, cell * .7, C.dim, 'center');
       return;
     }
     // pozo
@@ -204,6 +262,7 @@
   window.addEventListener('keydown', e => {
     const k = e.key.toLowerCase();
     if (['arrowleft','arrowright','arrowup','arrowdown',' '].includes(k) || k === 'z' || k === 'x' || k === 'w' || k === 'a' || k === 's' || k === 'd') e.preventDefault();
+    if (k === 'm') { musicOn = !musicOn; return; }
     if (state !== 'play') { start(); return; }
     if (k === 'arrowleft' || k === 'a') move(-1);
     else if (k === 'arrowright' || k === 'd') move(1);
