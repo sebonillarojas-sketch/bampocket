@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SNAKE · BAMboy</title>
+<style>
+  html,body{margin:0;padding:0;width:100%;height:100%;background:#07080C;overflow:hidden}
+  body{display:flex;align-items:center;justify-content:center}
+  canvas{width:100%;height:100%;image-rendering:pixelated;display:block}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+(() => {
+  const COLS = 20, ROWS = 18;            // 10:9, igual que la pantalla del BAMboy
+  const cv = document.getElementById('c');
+  const cx = cv.getContext('2d');
+  const C = {
+    bg: '#07080C', grid: 'rgba(168,155,217,.06)',
+    snake: '#8b5cf6', head: '#a78bfa', food: '#F4643B',
+    text: '#F4F1EA', dim: '#6B7280', accent: '#A89BD9',
+  };
+  let cell = 20;
+
+  function resize() {
+    const w = window.innerWidth || 400, h = window.innerHeight || 360;
+    cell = Math.max(8, Math.floor(Math.min(w / COLS, h / ROWS)));
+    cv.width = COLS * cell; cv.height = ROWS * cell;
+    cv.style.width = cv.width + 'px'; cv.style.height = cv.height + 'px';
+    draw();
+  }
+
+  // --- audio: blips retro, mismo sabor que la consola ---
+  let actx = null;
+  function tone(freq, dur, vol, type) {
+    try {
+      actx = actx || new (window.AudioContext || window.webkitAudioContext)();
+      if (actx.state === 'suspended') actx.resume();
+      const o = actx.createOscillator(), g = actx.createGain();
+      o.type = type || 'square'; o.frequency.value = freq;
+      g.gain.setValueAtTime(0.0001, actx.currentTime);
+      g.gain.exponentialRampToValueAtTime(vol, actx.currentTime + 0.01);
+      g.gain.exponentialRampToValueAtTime(0.0001, actx.currentTime + dur);
+      o.connect(g); g.connect(actx.destination);
+      o.start(); o.stop(actx.currentTime + dur + 0.05);
+    } catch (e) {}
+  }
+
+  // --- estado ---
+  let snake, dir, nextDir, food, score, best = 0, state = 'title', timer = null, speed;
+  try { best = +localStorage.getItem('bamboy-snake-best') || 0; } catch (e) {}
+
+  function reset() {
+    snake = [{x: 5, y: 9}, {x: 4, y: 9}, {x: 3, y: 9}];
+    dir = {x: 1, y: 0}; nextDir = dir;
+    score = 0; speed = 140;
+    placeFood();
+  }
+  function placeFood() {
+    do {
+      food = {x: (Math.random() * COLS) | 0, y: (Math.random() * ROWS) | 0};
+    } while (snake.some(s => s.x === food.x && s.y === food.y));
+  }
+  function start() {
+    reset(); state = 'play';
+    tone(659.25, .07, .07); tone(1046.5, .1, .07);
+    loop();
+  }
+  function loop() {
+    clearTimeout(timer);
+    timer = setTimeout(() => { step(); if (state === 'play') loop(); }, speed);
+  }
+  function step() {
+    dir = nextDir;
+    const head = {x: snake[0].x + dir.x, y: snake[0].y + dir.y};
+    if (head.x < 0 || head.x >= COLS || head.y < 0 || head.y >= ROWS ||
+        snake.some(s => s.x === head.x && s.y === head.y)) {
+      state = 'over';
+      if (score > best) { best = score; try { localStorage.setItem('bamboy-snake-best', best); } catch (e) {} }
+      tone(220, .25, .1, 'sawtooth'); setTimeout(() => tone(110, .4, .1, 'sawtooth'), 180);
+      draw(); return;
+    }
+    snake.unshift(head);
+    if (head.x === food.x && head.y === food.y) {
+      score++; speed = Math.max(60, speed - 4);
+      tone(880 + score * 20, .06, .08);
+      placeFood();
+    } else snake.pop();
+    draw();
+  }
+
+  // --- render ---
+  function px(n) { return n * cell; }
+  function text(str, y, size, color) {
+    cx.fillStyle = color; cx.font = 'bold ' + size + 'px "Courier New",monospace';
+    cx.textAlign = 'center'; cx.fillText(str, cv.width / 2, y);
+  }
+  function draw() {
+    cx.fillStyle = C.bg; cx.fillRect(0, 0, cv.width, cv.height);
+    cx.strokeStyle = C.grid; cx.lineWidth = 1;
+    for (let i = 1; i < COLS; i++) { cx.beginPath(); cx.moveTo(px(i) + .5, 0); cx.lineTo(px(i) + .5, cv.height); cx.stroke(); }
+    for (let j = 1; j < ROWS; j++) { cx.beginPath(); cx.moveTo(0, px(j) + .5); cx.lineTo(cv.width, px(j) + .5); cx.stroke(); }
+
+    if (state !== 'title') {
+      cx.fillStyle = C.food;
+      const fp = cell * .18;
+      cx.fillRect(px(food.x) + fp, px(food.y) + fp, cell - fp * 2, cell - fp * 2);
+      snake.forEach((s, i) => {
+        cx.fillStyle = i === 0 ? C.head : C.snake;
+        cx.fillRect(px(s.x) + 1, px(s.y) + 1, cell - 2, cell - 2);
+      });
+      text('SCORE ' + score + '   BEST ' + best, cell * 1.1, cell * .7, C.dim);
+    }
+    if (state === 'title') {
+      text('SNAKE', cv.height * .38, cell * 2, C.accent);
+      text('BAM STUDIO', cv.height * .48, cell * .75, C.dim);
+      text('FLECHAS PARA MOVER', cv.height * .62, cell * .8, C.text);
+      text('PULSA UNA TECLA O TOCA', cv.height * .70, cell * .8, C.text);
+      if (best) text('BEST ' + best, cv.height * .82, cell * .75, C.dim);
+    }
+    if (state === 'over') {
+      cx.fillStyle = 'rgba(7,8,12,.75)'; cx.fillRect(0, 0, cv.width, cv.height);
+      text('GAME OVER', cv.height * .42, cell * 1.6, C.food);
+      text('SCORE ' + score + (score === best && score ? ' · RECORD!' : ''), cv.height * .54, cell * .9, C.text);
+      text('TECLA O TAP PARA REINICIAR', cv.height * .66, cell * .75, C.dim);
+    }
+  }
+
+  // --- input ---
+  const KEYS = {
+    arrowup: {x: 0, y: -1}, arrowdown: {x: 0, y: 1}, arrowleft: {x: -1, y: 0}, arrowright: {x: 1, y: 0},
+    w: {x: 0, y: -1}, s: {x: 0, y: 1}, a: {x: -1, y: 0}, d: {x: 1, y: 0},
+  };
+  function turn(d) {
+    if (state !== 'play') return;
+    if (d.x === -dir.x && d.y === -dir.y) return; // no reversa
+    nextDir = d;
+  }
+  window.addEventListener('keydown', e => {
+    const k = e.key.toLowerCase();
+    if (KEYS[k]) { e.preventDefault(); if (state === 'play') turn(KEYS[k]); else start(); return; }
+    if (state !== 'play') start();
+  });
+  // tap / swipe para móvil
+  let t0 = null;
+  window.addEventListener('pointerdown', e => { t0 = {x: e.clientX, y: e.clientY}; if (state !== 'play') start(); });
+  window.addEventListener('pointerup', e => {
+    if (!t0 || state !== 'play') return;
+    const dx = e.clientX - t0.x, dy = e.clientY - t0.y; t0 = null;
+    if (Math.abs(dx) < 18 && Math.abs(dy) < 18) return;
+    turn(Math.abs(dx) > Math.abs(dy) ? {x: Math.sign(dx), y: 0} : {x: 0, y: Math.sign(dy)});
+  });
+
+  window.addEventListener('resize', resize);
+  try { window.focus(); } catch (e) {}
+  reset(); state = 'title';
+  resize();
+})();
+</script>
+</body>
+</html>
