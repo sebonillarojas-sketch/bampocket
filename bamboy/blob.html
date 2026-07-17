@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SUPER BLOB · BAMboy</title>
+<style>
+  html,body{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;-webkit-tap-highlight-color:rgba(0,0,0,0);touch-action:manipulation}
+  html,body{margin:0;padding:0;width:100%;height:100%;background:#07080C;overflow:hidden}
+  body{display:flex;align-items:center;justify-content:center}
+  canvas{display:block;touch-action:none}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+(() => {
+  const cv = document.getElementById('c');
+  const cx = cv.getContext('2d');
+  const C = {
+    bg0: '#07080C', bg1: '#0D1024', ground: '#3a4152', groundTop: '#4a5266',
+    plat: '#2A3BAF', blob: '#8b5cf6', blobHi: '#a78bfa',
+    seed: '#4ade80', enemy: '#6B7280', enemyHi: '#9CA3AF',
+    flagPole: '#9CA3AF', flag: '#8b5cf6',
+    text: '#F4F1EA', dim: '#6B7280', accent: '#A89BD9', bad: '#F4643B',
+  };
+  const T = 16; // tile
+  // nivel en ASCII: # suelo, = plataforma, o semilla, E enemigo, F bandera, P inicio
+  const MAP = [
+    "                                                                                                                        ",
+    "                                                                                                                        ",
+    "                                                                                                                        ",
+    "                  ooo                                oo                                                                 ",
+    "                  ===                         o     ====        ooo                                          F          ",
+    "                                       o     ===                ===          oo            ooo               |          ",
+    "            oo                        ===                 o                 ====          =====              |          ",
+    "           ====        E                        E        ===       E                E                E       |          ",
+    "                                ==                                                        o    o            |          ",
+    "     P                         ====                =                  ==        =                             |          ",
+    "                    o                       oo    ===       o       ====      ===     o   ==   o             |          ",
+    "########   ####################   ######  #############   #####################   ##########################################",
+    "########   ####################   ######  #############   #####################   ##########################################",
+    "########   ####################   ######  #############   #####################   ##########################################",
+  ];
+  const ROWS = MAP.length, COLS = MAP[0].length;
+  const solid = (r, c) => r >= 0 && r < ROWS && c >= 0 && c < COLS && (MAP[r][c] === '#' || MAP[r][c] === '=');
+
+  let W = 400, H = 360, scale = 1;
+  function resize() {
+    const w = window.innerWidth || 400, h = window.innerHeight || 360;
+    const s = Math.min(w / 10, h / 9);
+    W = Math.floor(s * 10); H = Math.floor(s * 9);
+    cv.width = W; cv.height = H;
+    scale = H / (12 * T); // ~12 tiles visibles de alto
+    draw();
+  }
+
+  // --- audio ---
+  let actx = null;
+  function tone(freq, dur, vol, type) {
+    try {
+      actx = actx || new (window.AudioContext || window.webkitAudioContext)();
+      if (actx.state === 'suspended') actx.resume();
+      const o = actx.createOscillator(), g = actx.createGain();
+      o.type = type || 'square'; o.frequency.value = freq;
+      g.gain.setValueAtTime(0.0001, actx.currentTime);
+      g.gain.exponentialRampToValueAtTime(vol, actx.currentTime + 0.01);
+      g.gain.exponentialRampToValueAtTime(0.0001, actx.currentTime + dur);
+      o.connect(g); g.connect(actx.destination);
+      o.start(); o.stop(actx.currentTime + dur + 0.05);
+    } catch (e) {}
+  }
+  const sJump = () => { tone(392, .08, .07); tone(659.25, .12, .06); };
+  const sSeed = () => tone(1318.5, .07, .07);
+  const sStomp = () => tone(196, .09, .09);
+  const sDie = () => { tone(220, .2, .1, 'sawtooth'); setTimeout(() => tone(110, .3, .1, 'sawtooth'), 150); };
+  const sWin = () => [523.25, 659.25, 783.99, 1046.5, 1318.5].forEach((f, i) => setTimeout(() => tone(f, .12, .08), i * 110));
+
+  // --- estado ---
+  let state = 'title', pl, seeds, enemies, flag, score, lives, camX, best = 0, tPrev = 0;
+  try { best = +localStorage.getItem('bamboy-blob-best') || 0; } catch (e) {}
+
+  function levelObjects() {
+    seeds = []; enemies = []; flag = null;
+    for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) {
+      const ch = MAP[r][c];
+      if (ch === 'o') seeds.push({c, r, got: false});
+      else if (ch === 'E') enemies.push({x: c * T, y: r * T, w: T * .9, h: T * .9, vx: -28, dead: false});
+      else if (ch === 'F') flag = {c, r};
+      else if (ch === 'P') pl = {x: c * T, y: r * T, w: T * .8, h: T * .95, vx: 0, vy: 0, onGround: false, face: 1};
+    }
+  }
+  function startGame() {
+    score = 0; lives = 3;
+    respawn();
+    state = 'play';
+    tone(659.25, .07, .07); tone(1046.5, .1, .07);
+  }
+  function respawn() {
+    levelObjects();
+    camX = 0;
+    held.left = held.right = false; jumpBuf = 0;
+  }
+
+  // --- física ---
+  const GRAV = 620, RUN = 92, AIR = 78, JUMP = 235, MAXFALL = 320;
+  const held = {left: false, right: false};
+  let jumpBuf = 0, coyote = 0;
+
+  function rectVsMap(e) {
+    // resuelve colisión por ejes
+    let c0 = Math.floor(e.x / T), c1 = Math.floor((e.x + e.w - 0.01) / T);
+    let r0 = Math.floor(e.y / T), r1 = Math.floor((e.y + e.h - 0.01) / T);
+    return {c0, c1, r0, r1};
+  }
+  function step(dt) {
+    // control horizontal
+    const acc = pl.onGround ? RUN : AIR;
+    if (held.left) { pl.vx = -acc; pl.face = -1; }
+    else if (held.right) { pl.vx = acc; pl.face = 1; }
+    else pl.vx = 0;
+    // salto con buffer y coyote
+    coyote = pl.onGround ? .1 : Math.max(0, coyote - dt);
+    jumpBuf = Math.max(0, jumpBuf - dt);
+    if (jumpBuf > 0 && coyote > 0) { pl.vy = -JUMP; pl.onGround = false; coyote = 0; jumpBuf = 0; sJump(); }
+    pl.vy = Math.min(MAXFALL, pl.vy + GRAV * dt);
+
+    // mover X
+    pl.x += pl.vx * dt;
+    let b = rectVsMap(pl);
+    if (pl.vx > 0) { for (let r = b.r0; r <= b.r1; r++) if (solid(r, b.c1)) { pl.x = b.c1 * T - pl.w - 0.01; break; } }
+    if (pl.vx < 0) { for (let r = b.r0; r <= b.r1; r++) if (solid(r, b.c0)) { pl.x = (b.c0 + 1) * T + 0.01; break; } }
+    if (pl.x < 0) pl.x = 0;
+
+    // mover Y
+    pl.y += pl.vy * dt;
+    b = rectVsMap(pl);
+    pl.onGround = false;
+    if (pl.vy > 0) { for (let c = b.c0; c <= b.c1; c++) if (solid(b.r1, c)) { pl.y = b.r1 * T - pl.h - 0.01; pl.vy = 0; pl.onGround = true; break; } }
+    if (pl.vy < 0) { for (let c = b.c0; c <= b.c1; c++) if (solid(b.r0, c)) { pl.y = (b.r0 + 1) * T + 0.01; pl.vy = 0; break; } }
+
+    // caída al vacío
+    if (pl.y > ROWS * T + T * 2) return hurt();
+
+    // semillas
+    for (const s of seeds) {
+      if (s.got) continue;
+      if (pl.x < (s.c + .8) * T && pl.x + pl.w > (s.c + .2) * T && pl.y < (s.r + .8) * T && pl.y + pl.h > (s.r + .2) * T) {
+        s.got = true; score += 10; sSeed();
+      }
+    }
+    // enemigos
+    for (const en of enemies) {
+      if (en.dead) continue;
+      en.x += en.vx * dt;
+      const eb = rectVsMap(en);
+      // rebote contra pared o borde de plataforma
+      const aheadC = en.vx < 0 ? eb.c0 : eb.c1;
+      const footR = Math.floor((en.y + en.h + 1) / T);
+      let wall = false;
+      for (let r = eb.r0; r <= eb.r1; r++) if (solid(r, aheadC)) wall = true;
+      if (wall || !solid(footR, aheadC)) en.vx *= -1;
+      // gravedad simple (quedan pegados al suelo por construcción del nivel)
+      // colisión con el jugador
+      if (pl.x < en.x + en.w && pl.x + pl.w > en.x && pl.y < en.y + en.h && pl.y + pl.h > en.y) {
+        if (pl.vy > 60 && pl.y + pl.h - en.y < en.h * .6) {
+          en.dead = true; score += 25; pl.vy = -JUMP * .55; sStomp();
+        } else return hurt();
+      }
+    }
+    // bandera
+    if (flag && pl.x + pl.w > flag.c * T + T * .3) return win();
+    // cámara
+    camX = Math.max(0, Math.min(COLS * T - W / scale, pl.x - (W / scale) * .38));
+  }
+  function hurt() {
+    lives--; sDie();
+    if (lives <= 0) { state = 'over'; saveBest(); } else { state = 'hit'; setTimeout(() => { if (state === 'hit') { respawn(); state = 'play'; } }, 900); }
+  }
+  function win() { state = 'win'; score += 100; saveBest(); sWin(); }
+  function saveBest() { if (score > best) { best = score; try { localStorage.setItem('bamboy-blob-best', best); } catch (e) {} } }
+
+  // --- render ---
+  function text(str, x, y, size, color, align) {
+    cx.fillStyle = color; cx.font = 'bold ' + size + 'px "Courier New",monospace';
+    cx.textAlign = align || 'center'; cx.fillText(str, x, y);
+  }
+  function draw() {
+    cx.fillStyle = C.bg0; cx.fillRect(0, 0, W, H);
+    if (state === 'title') {
+      text('SUPER BLOB', W / 2, H * .34, H * .09, C.accent);
+      text('BAM STUDIO', W / 2, H * .43, H * .04, C.dim);
+      // blob de portada
+      cx.fillStyle = C.blob; cx.beginPath(); cx.ellipse(W / 2, H * .56, H * .06, H * .055, 0, 0, 7); cx.fill();
+      text('CORRE, SALTA, PISA CUBOS', W / 2, H * .70, H * .04, C.text);
+      text('PANTALLA: ◄ ► ZONAS · TAP = SALTO', W / 2, H * .77, H * .035, C.text);
+      if (best) text('BEST ' + best, W / 2, H * .87, H * .04, C.dim);
+      return;
+    }
+    cx.save();
+    cx.scale(scale, scale);
+    cx.translate(-camX, 0);
+    const cA = Math.floor(camX / T), cB = Math.ceil((camX + W / scale) / T);
+    // tiles
+    for (let r = 0; r < ROWS; r++) for (let c = Math.max(0, cA); c <= Math.min(COLS - 1, cB); c++) {
+      const ch = MAP[r][c];
+      if (ch === '#') {
+        cx.fillStyle = C.ground; cx.fillRect(c * T, r * T, T, T);
+        if (!solid(r - 1, c)) { cx.fillStyle = C.groundTop; cx.fillRect(c * T, r * T, T, 3); }
+      } else if (ch === '=') {
+        cx.fillStyle = C.plat; cx.fillRect(c * T, r * T, T, T * .45);
+      }
+    }
+    // semillas
+    for (const s of seeds) {
+      if (s.got) continue;
+      cx.fillStyle = C.seed;
+      cx.beginPath(); cx.arc((s.c + .5) * T, (s.r + .5) * T, T * .18, 0, 7); cx.fill();
+    }
+    // bandera
+    if (flag) {
+      cx.fillStyle = C.flagPole; cx.fillRect(flag.c * T + T * .45, (flag.r) * T, 2, T * 7);
+      cx.fillStyle = C.flag; cx.beginPath();
+      cx.moveTo(flag.c * T + T * .45 + 2, flag.r * T);
+      cx.lineTo(flag.c * T + T * .45 + 2 + T * .9, flag.r * T + T * .3);
+      cx.lineTo(flag.c * T + T * .45 + 2, flag.r * T + T * .6);
+      cx.fill();
+    }
+    // enemigos
+    for (const en of enemies) {
+      if (en.dead) continue;
+      cx.fillStyle = C.enemy; cx.fillRect(en.x, en.y, en.w, en.h);
+      cx.fillStyle = C.enemyHi; cx.fillRect(en.x, en.y, en.w, 2.5);
+      cx.fillStyle = C.bg0;
+      cx.fillRect(en.x + en.w * .2, en.y + en.h * .3, 2.5, 2.5);
+      cx.fillRect(en.x + en.w * .65, en.y + en.h * .3, 2.5, 2.5);
+    }
+    // blob
+    if (state !== 'hit' || Math.floor(Date.now() / 90) % 2) {
+      const squash = pl.onGround ? 1 : .88;
+      cx.fillStyle = C.blob;
+      cx.beginPath();
+      cx.ellipse(pl.x + pl.w / 2, pl.y + pl.h * (1 - squash / 2), pl.w * .62, pl.h * .55 * squash, 0, 0, 7);
+      cx.fill();
+      cx.fillStyle = C.blobHi;
+      cx.beginPath(); cx.ellipse(pl.x + pl.w / 2 - pl.w * .18, pl.y + pl.h * .3, pl.w * .14, pl.h * .12, -.5, 0, 7); cx.fill();
+      cx.fillStyle = C.bg0;
+      const ex = pl.x + pl.w / 2 + pl.face * pl.w * .18;
+      cx.fillRect(ex - 1.2, pl.y + pl.h * .35, 2.4, 3.4);
+    }
+    cx.restore();
+    // HUD
+    text('SCORE ' + score, 10, H * .06, H * .035, C.dim, 'left');
+    text('♥'.repeat(Math.max(0, lives)), W - 10, H * .06, H * .04, C.bad, 'right');
+    if (state === 'over') {
+      cx.fillStyle = 'rgba(7,8,12,.75)'; cx.fillRect(0, 0, W, H);
+      text('GAME OVER', W / 2, H * .44, H * .08, C.bad);
+      text('SCORE ' + score, W / 2, H * .54, H * .05, C.text);
+      text('TECLA O TAP PARA REINICIAR', W / 2, H * .65, H * .035, C.dim);
+    }
+    if (state === 'win') {
+      cx.fillStyle = 'rgba(7,8,12,.75)'; cx.fillRect(0, 0, W, H);
+      text('¡NIVEL COMPLETADO!', W / 2, H * .44, H * .065, C.accent);
+      text('SCORE ' + score + (score >= best && score ? ' · RECORD!' : ''), W / 2, H * .54, H * .05, C.text);
+      text('TECLA O TAP PARA OTRA VUELTA', W / 2, H * .65, H * .035, C.dim);
+    }
+  }
+
+  // --- loop ---
+  function frame(t) {
+    requestAnimationFrame(frame);
+    const dt = Math.min(.033, (t - tPrev) / 1000 || 0); tPrev = t;
+    if (state === 'play' || state === 'hit') { if (state === 'play') step(dt); draw(); }
+  }
+  requestAnimationFrame(frame);
+
+  // --- input ---
+  function press(action) {
+    if (state === 'title' || state === 'over' || state === 'win') { startGame(); return true; }
+    return false;
+  }
+  window.addEventListener('keydown', e => {
+    const k = e.key.toLowerCase();
+    if (['arrowleft','arrowright','arrowup',' ','a','d','w'].includes(k)) e.preventDefault();
+    if (press()) return;
+    if (k === 'arrowleft' || k === 'a') held.left = true;
+    else if (k === 'arrowright' || k === 'd') held.right = true;
+    else if (k === 'arrowup' || k === 'w' || k === ' ' || k === 'x') jumpBuf = .12;
+  });
+  window.addEventListener('keyup', e => {
+    const k = e.key.toLowerCase();
+    if (k === 'arrowleft' || k === 'a') held.left = false;
+    if (k === 'arrowright' || k === 'd') held.right = false;
+  });
+  // táctil: mitad izquierda = zonas ◄ ►, mitad derecha = salto (mantener para correr)
+  const touches = {};
+  function zoneOf(e) {
+    const r = cv.getBoundingClientRect();
+    const x = (e.clientX - r.left) / r.width;
+    return x < .25 ? 'left' : x < .5 ? 'right' : 'jump';
+  }
+  window.addEventListener('pointerdown', e => {
+    if (press()) return;
+    const z = zoneOf(e);
+    touches[e.pointerId] = z;
+    if (z === 'jump') jumpBuf = .12;
+    else held[z] = true;
+  });
+  function endTouch(e) {
+    const z = touches[e.pointerId];
+    delete touches[e.pointerId];
+    if (z === 'left' || z === 'right') {
+      held[z] = Object.values(touches).includes(z);
+    }
+  }
+  window.addEventListener('pointerup', endTouch);
+  window.addEventListener('pointercancel', endTouch);
+  // botones físicos de la consola BAMboy: ráfagas de carrera + salto
+  const btnTimers = {};
+  window.addEventListener('message', e => {
+    const d = e.data;
+    if (!d || d.bamboy !== 'btn') return;
+    if (press()) return;
+    if (d.btn === 'left' || d.btn === 'right') {
+      held[d.btn] = true;
+      const other = d.btn === 'left' ? 'right' : 'left';
+      held[other] = false;
+      clearTimeout(btnTimers[d.btn]);
+      btnTimers[d.btn] = setTimeout(() => { held[d.btn] = false; }, 300);
+    } else if (d.btn === 'a' || d.btn === 'up') jumpBuf = .12;
+    else if (d.btn === 'b') { // B = correr+saltar (combo útil)
+      jumpBuf = .12;
+    }
+  });
+
+  window.addEventListener('resize', resize);
+  try { window.focus(); } catch (e) {}
+  levelObjects();
+  resize();
+})();
+</script>
+</body>
+</html>
