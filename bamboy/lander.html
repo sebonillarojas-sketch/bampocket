@@ -918,19 +918,20 @@
 </script>
 
 <script>
-/* BAMboy: botones fisicos de la consola -> teclas sinteticas (postMessage del padre) */
+/* BAMboy: botones fisicos -> teclas sinteticas. A = THRUST (rafaga larga), giros finos */
 (function(){
-  var MAP = {up:'ArrowUp',down:'ArrowDown',left:'ArrowLeft',right:'ArrowRight',a:'Space',b:'ShiftLeft',start:'Enter'};
-  var KEY = {ArrowUp:'ArrowUp',ArrowDown:'ArrowDown',ArrowLeft:'ArrowLeft',ArrowRight:'ArrowRight',Space:' ',ShiftLeft:'Shift',Enter:'Enter'};
+  var MAP = {a:['ArrowUp',420], up:['ArrowUp',420], left:['ArrowLeft',160], right:['ArrowRight',160], b:['Space',120], start:['Enter',120], down:['ArrowDown',160]};
+  var KEY = {ArrowUp:'ArrowUp',ArrowDown:'ArrowDown',ArrowLeft:'ArrowLeft',ArrowRight:'ArrowRight',Space:' ',Enter:'Enter'};
   var timers = {};
   window.addEventListener('message', function(e){
     var d = e.data;
     if (!d || d.bamboy !== 'btn') return;
-    var code = MAP[d.btn]; if (!code) return;
+    var m = MAP[d.btn]; if (!m) return;
+    var code = m[0], hold = m[1];
     function ev(t){ return new KeyboardEvent(t, {code: code, key: KEY[code], bubbles: true, cancelable: true}); }
     document.dispatchEvent(ev('keydown'));
     clearTimeout(timers[code]);
-    timers[code] = setTimeout(function(){ document.dispatchEvent(ev('keyup')); }, 220);
+    timers[code] = setTimeout(function(){ document.dispatchEvent(ev('keyup')); }, hold);
   });
 })();
 </script>
