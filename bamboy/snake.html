@@ -153,6 +153,15 @@
     turn(Math.abs(dx) > Math.abs(dy) ? {x: Math.sign(dx), y: 0} : {x: 0, y: Math.sign(dy)});
   });
 
+  // botones físicos de la consola BAMboy (postMessage del padre)
+  const DIRS = {up: {x:0,y:-1}, down: {x:0,y:1}, left: {x:-1,y:0}, right: {x:1,y:0}};
+  window.addEventListener('message', e => {
+    const d = e.data;
+    if (!d || d.bamboy !== 'btn') return;
+    if (state !== 'play') { start(); return; }
+    if (DIRS[d.btn]) turn(DIRS[d.btn]);
+  });
+
   window.addEventListener('resize', resize);
   try { window.focus(); } catch (e) {}
   reset(); state = 'title';

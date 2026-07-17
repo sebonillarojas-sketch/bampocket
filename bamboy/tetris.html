@@ -286,6 +286,19 @@
     else if (dy < -40) tryRotate(1);
   });
 
+  // botones físicos de la consola BAMboy (postMessage del padre)
+  window.addEventListener('message', e => {
+    const d = e.data;
+    if (!d || d.bamboy !== 'btn') return;
+    if (state !== 'play') { start(); return; }
+    if (d.btn === 'left') move(-1);
+    else if (d.btn === 'right') move(1);
+    else if (d.btn === 'down') drop(true);
+    else if (d.btn === 'up' || d.btn === 'a') tryRotate(1);
+    else if (d.btn === 'b') tryRotate(-1);
+    else if (d.btn === 'start') hardDrop();
+  });
+
   window.addEventListener('resize', resize);
   try { window.focus(); } catch (e) {}
   resize();

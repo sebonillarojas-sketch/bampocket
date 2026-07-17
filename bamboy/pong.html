@@ -182,6 +182,17 @@
   });
   window.addEventListener('pointerup', () => { dragging = false; });
 
+  // botones físicos de la consola BAMboy (postMessage del padre)
+  window.addEventListener('message', e => {
+    const d = e.data;
+    if (!d || d.bamboy !== 'btn') return;
+    if (state === 'title' || state === 'over') { startMatch(); return; }
+    if (state !== 'play') return;
+    const step = H * .09;
+    if (d.btn === 'up') pl.y = Math.max(0, pl.y - step);
+    else if (d.btn === 'down') pl.y = Math.min(H - pl.h, pl.y + step);
+  });
+
   window.addEventListener('resize', resize);
   try { window.focus(); } catch (e) {}
   resize();
